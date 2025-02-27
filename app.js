@@ -65,10 +65,9 @@ app.use(function (req, res, next) {
 });
 
 const HOST_NAME = process.env.HOST_NAME;
-const PORT = process.env.PORT;
-
-app.listen(PORT, HOST_NAME, () => {
-  console.log(`Server is running on http://${HOST_NAME}:${PORT}`);
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`Server is running on port ${PORT}`);
 });
 
 // error handler
