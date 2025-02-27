@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Thông báo hoàn tiền</title>
+  </head>
+  <body>
+    <h2>Thông tin hoàn tiền</h2>
+    <p>Đơn hàng: {{orderId}}</p>
+    <p>Tổng số tiền được hoàn: <strong>{{refundAmount}} VND</strong></p>
+
+    <h3>Chi tiết sản phẩm</h3>
+    <table border="1" cellpadding="5" cellspacing="0">
+      <thead>
+        <tr>
+          <th>Sản phẩm</th>
+          <th>Số lượng</th>
+          <th>Giá</th>
+          <th>Thành tiền</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{#each items}}
+        <tr>
+          <td>{{this.productName}}</td>
+          <td>{{this.quantity}}</td>
+          <td>{{this.price}} VND</td>
+          <td>{{this.total}} VND</td>
+        </tr>
+        {{/each}}
+      </tbody>
+    </table>
+
+    <p>Cảm ơn quý khách đã sử dụng dịch vụ của chúng tôi.</p>
+  </body>
+</html>
