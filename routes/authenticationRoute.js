@@ -164,6 +164,9 @@ authenticationRoute.post("/login", async (req, res) => {
     if (!account) {
       return res.status(404).send({ message: "Email or password is not correct" });
     }
+    if (account.status === false) {
+      return res.status(401).send({ message: "Account is disabled" });
+    }
 
     const isPasswordCorrect = await bcrypt.compare(password, account.password);
     if (!isPasswordCorrect) {
