@@ -459,7 +459,7 @@ dashboardRoute.get("/revenue/cancel", authMiddleware, roleMiddleware(["admin"]),
     ]);
 
     const result = orderStatistics[0] || { totalRevenue: 0, totalCustomers: 0 };
-
+    result.totalRevenue = result.totalRevenue / 2;
     res.status(200).json(result);
   } catch (error) {
     console.error("Error fetching revenue statistics:", error);
