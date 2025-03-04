@@ -317,7 +317,7 @@ dashboardRoute.get("/brand", authMiddleware, roleMiddleware(["admin"]), async (r
  *   get:
  *     tags:
  *       - Dashboard
- *     summary: Get revenue statistics for a specific year
+ *     summary: Get revenue and canceled revenue statistics for a specific year
  *     parameters:
  *       - in: query
  *         name: year
@@ -335,10 +335,13 @@ dashboardRoute.get("/brand", authMiddleware, roleMiddleware(["admin"]), async (r
  *               properties:
  *                 totalRevenue:
  *                   type: number
- *                   description: The total revenue for the specified year
+ *                   description: The total revenue from paid orders for the specified year
+ *                 totalCanceled:
+ *                   type: number
+ *                   description: The total amount refunded from canceled orders (50% of total canceled amount)
  *                 totalCustomers:
  *                   type: number
- *                   description: The total number of customers who made purchases in the specified year
+ *                   description: The total number of unique customers who had transactions in the specified year
  *       400:
  *         description: Bad request
  *       403:
@@ -357,110 +360,47 @@ dashboardRoute.get("/revenue", authMiddleware, roleMiddleware(["admin"]), async 
     const startDate = new Date(`${year}-01-01T00:00:00.000Z`);
     const endDate = new Date(`${year}-12-31T23:59:59.999Z`);
 
-    const orderStatistics = await db.Order.aggregate([
+    const revenueStatistics = await db.Order.aggregate([
       {
         $match: {
           createdAt: { $gte: startDate, $lte: endDate },
-          status: "Paid",
         },
       },
       {
         $group: {
-          _id: null,
-          totalRevenue: { $sum: "$totalAmount" },
+          _id: "$status",
+          totalAmount: { $sum: "$totalAmount" },
           uniqueCustomers: { $addToSet: "$account" },
         },
       },
       {
         $project: {
           _id: 0,
-          totalRevenue: 1,
+          status: "$_id",
+          totalAmount: 1,
           totalCustomers: { $size: "$uniqueCustomers" },
         },
       },
     ]);
 
-    const result = orderStatistics[0] || { totalRevenue: 0, totalCustomers: 0 };
+    let totalRevenue = 0;
+    let totalCanceled = 0;
+    let customers = new Set();
 
-    res.status(200).json(result);
-  } catch (error) {
-    console.error("Error fetching revenue statistics:", error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-});
+    revenueStatistics.forEach((stat) => {
+      if (stat.status === "Paid") {
+        totalRevenue = stat.totalAmount;
+      } else if (stat.status === "Canceled") {
+        totalCanceled = stat.totalAmount / 2;
+      }
+      stat.uniqueCustomers?.forEach((customer) => customers.add(customer));
+    });
 
-/**
- * @swagger
- * /api/dashboard/revenue/cancel:
- *   get:
- *     tags:
- *       - Dashboard
- *     summary: Get canceled revenue statistics for a specific year
- *     parameters:
- *       - in: query
- *         name: year
- *         required: true
- *         schema:
- *           type: integer
- *         description: The year for which to retrieve canceled revenue statistics
- *     responses:
- *       200:
- *         description: Successful response
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 totalRevenue:
- *                   type: number
- *                   description: The total canceled revenue for the specified year
- *                 totalCustomers:
- *                   type: number
- *                   description: The total number of customers who canceled purchases in the specified year
- *       400:
- *         description: Bad request
- *       403:
- *         description: Forbidden, user does not have permission
- *       500:
- *         description: Internal server error
- */
-dashboardRoute.get("/revenue/cancel", authMiddleware, roleMiddleware(["admin"]), async (req, res) => {
-  try {
-    const { year } = req.query;
-
-    if (!year) {
-      return res.status(400).json({ message: "Year parameter is required" });
-    }
-
-    const startDate = new Date(`${year}-01-01T00:00:00.000Z`);
-    const endDate = new Date(`${year}-12-31T23:59:59.999Z`);
-
-    const orderStatistics = await db.Order.aggregate([
-      {
-        $match: {
-          createdAt: { $gte: startDate, $lte: endDate },
-          status: "Canceled",
-        },
-      },
-      {
-        $group: {
-          _id: null,
-          totalRevenue: { $sum: "$totalAmount" },
-          uniqueCustomers: { $addToSet: "$account" },
-        },
-      },
-      {
-        $project: {
-          _id: 0,
-          totalRevenue: 1,
-          totalCustomers: { $size: "$uniqueCustomers" },
-        },
-      },
-    ]);
-
-    const result = orderStatistics[0] || { totalRevenue: 0, totalCustomers: 0 };
-    result.totalRevenue = result.totalRevenue / 2;
-    res.status(200).json(result);
+    res.status(200).json({
+      totalRevenue,
+      totalCanceled,
+      totalCustomers: customers.size,
+    });
   } catch (error) {
     console.error("Error fetching revenue statistics:", error);
     res.status(500).json({ message: "Internal server error" });
