@@ -156,7 +156,7 @@ orderRoute.post("/add-to-cart", authMiddleware, async (req, res) => {
       account,
       items: orderItems,
       totalAmount,
-      status: "Pending",
+      status: "Pending", // Set initial status to Pending
       imageConfirmDelivered: null,
     });
 
@@ -169,22 +169,22 @@ orderRoute.post("/add-to-cart", authMiddleware, async (req, res) => {
       testMode: true,
       hashAlgorithm: "SHA512",
       enableLog: true,
-      loggerFn: ignoreLogger,
+      loggerFn: console.log,
     });
 
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
 
     const vnpayResponse = await vnpay.buildPaymentUrl({
-      vnp_Amount: totalAmount,
+      vnp_Amount: totalAmount * 100, // Convert to cents
       vnp_IpAddr: "127.0.0.1",
       vnp_TxnRef: newOrder._id.toString(),
-      vnp_OrderInfo: `${newOrder._id}`,
+      vnp_OrderInfo: `Thanh toan don hang ${newOrder._id}`,
       vnp_OrderType: ProductCode.Other,
-      vnp_ReturnUrl: "exp://192.168.0.103:8081/--/cart?orderId=${newOrder._id}",
+      vnp_ReturnUrl: `exp://192.168.1.4:8081/--/cart?orderId=${newOrder._id}`, // Deep link return URL
       vnp_Locale: VnpLocale.VN,
-      vnp_CreateDate: dateFormat(new Date()),
-      vnp_ExpireDate: dateFormat(tomorrow),
+      vnp_CreateDate: dateFormat(new Date(), "yyyymmddHHMMss"),
+      vnp_ExpireDate: dateFormat(tomorrow, "yyyymmddHHMMss"),
     });
 
     return res.status(201).json({
@@ -192,6 +192,7 @@ orderRoute.post("/add-to-cart", authMiddleware, async (req, res) => {
       vnpayResponse,
     });
   } catch (error) {
+    console.error("Order creation error:", error);
     res.status(500).json({ message: "Server error.", error: error.message });
   }
 });
@@ -199,7 +200,7 @@ orderRoute.post("/add-to-cart", authMiddleware, async (req, res) => {
 /**
  * @swagger
  * /api/order/confirm-payment/{orderId}:
- *   put:
+ *   get:
  *     tags:
  *       - Orders
  *     summary: Confirm order payment and finalize order
@@ -210,6 +211,12 @@ orderRoute.post("/add-to-cart", authMiddleware, async (req, res) => {
  *         schema:
  *           type: string
  *         description: The ID of the order to confirm
+ *       - in: query
+ *         name: vnp_ResponseCode
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: The response code from VNPAY to confirm payment status
  *     responses:
  *       200:
  *         description: Payment confirmed and order finalized
@@ -218,23 +225,29 @@ orderRoute.post("/add-to-cart", authMiddleware, async (req, res) => {
  *       500:
  *         description: Server error
  */
-orderRoute.put("/confirm-payment/:orderId", authMiddleware, async (req, res) => {
+orderRoute.get("/confirm-payment/:orderId", authMiddleware, async (req, res) => {
   try {
-    const { orderId } = req.params; // Lấy orderId từ URL params
+    const { orderId } = req.params;
+    const { vnp_ResponseCode } = req.query;
+
+    // Check if payment was successful
+    if (vnp_ResponseCode !== "00") {
+      return res.redirect(`exp://192.168.1.4:8081/--/cart?status=error&message=Payment%20unsuccessful`);
+    }
+
     const order = await db.Order.findById(orderId).populate("items.product");
 
     if (!order) {
-      return res.status(404).json({ message: "Order not found." });
+      return res.redirect(`exp://192.168.1.4:8081/--/cart?status=error&message=Order%20not%20found`);
     }
 
     if (order.status !== "Pending") {
-      return res.status(400).json({ message: "Order has already been processed." });
+      return res.redirect(`exp://192.168.1.4:8081/--/cart?status=error&message=Order%20already%20processed`);
     }
 
-    const account = await db.Account.findById(order.account);
-    if (!account) {
-      return res.status(404).json({ message: "Account not found." });
-    }
+    // Update order status to Paid
+    order.status = "Paid";
+    await order.save();
 
     // Reduce product quantities
     for (const item of order.items) {
@@ -245,63 +258,11 @@ orderRoute.put("/confirm-payment/:orderId", authMiddleware, async (req, res) => 
       }
     }
 
-    // Update order status
-    order.status = "Paid";
-    await order.save();
-
-    // Transfer funds to admin account
-    const adminAccount = await db.Account.findOne({ role: "admin" });
-    if (adminAccount) {
-      adminAccount.balance += order.totalAmount;
-      await adminAccount.save();
-    }
-
-    // Send confirmation email
-    const formattedItems = order.items.map((item) => ({
-      productName: item.product?.name || "Unknown Product",
-      quantity: item.quantity,
-      price: item.product?.price || 0,
-      total: item.quantity * item.product?.price || 0,
-    }));
-
-    const emailTemplatePath = path.join(__dirname, "../templates/orderConfirmationTemplate.html");
-    const emailTemplateSource = fs.readFileSync(emailTemplatePath, "utf8");
-    const emailTemplate = handlebars.compile(emailTemplateSource);
-    const emailHtml = emailTemplate({
-      orderId: order._id,
-      totalAmount: order.totalAmount,
-      items: formattedItems,
-    });
-
-    const transporter = nodemailer.createTransport({
-      service: "gmail",
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS,
-      },
-    });
-
-    const mailOptions = {
-      from: process.env.EMAIL_USER,
-      to: account.email,
-      subject: "Order Confirmation",
-      html: emailHtml,
-    };
-
-    transporter.sendMail(mailOptions, (error, info) => {
-      if (error) {
-        console.error("Error sending email:", error);
-      } else {
-        console.log("Email sent:", info.response);
-      }
-    });
-
-    return res.status(200).json({
-      message: "Payment confirmed and order processed.",
-      orderId: order._id,
-    });
+    // Redirect to success page
+    return res.redirect(`exp://192.168.1.4:8081/--/cart?status=success&orderId=${orderId}`);
   } catch (error) {
-    res.status(500).json({ message: "Server error.", error: error.message });
+    console.error("Confirm Payment Error:", error);
+    return res.redirect(`exp://192.168.1.4:8081/--/cart?status=error&message=${encodeURIComponent(error.message)}`);
   }
 });
 
