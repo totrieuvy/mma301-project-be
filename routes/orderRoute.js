@@ -413,7 +413,7 @@ orderRoute.post("/confirm-delivery/:orderId", authMiddleware, upload.single("del
     return res.status(200).json({
       message: "Order delivery confirmed.",
       orderId: order._id,
-      imagePath: `https://mma301-project-be.onrender.com//${order.imageConfirmDelivered}`,
+      imagePath: `https://mma301-project-be.onrender.com/${order.imageConfirmDelivered}`,
     });
   } catch (error) {
     res.status(500).json({ message: "Server error.", error: error.message });
