@@ -406,7 +406,9 @@ orderRoute.post("/confirm-delivery/:orderId", authMiddleware, upload.single("del
     }
 
     // Save the image path
-    order.imageConfirmDelivered = `/uploads/deliveryConfirmation/${req.file.filename}`;
+    const baseUrl = "https://mma301-project-be.onrender.com";
+    order.imageConfirmDelivered = `${baseUrl}/uploads/deliveryConfirmation/${req.file.filename}`;
+
     order.status = "Delivered";
     await order.save();
 
