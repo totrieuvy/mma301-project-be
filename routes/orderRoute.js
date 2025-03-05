@@ -406,14 +406,14 @@ orderRoute.post("/confirm-delivery/:orderId", authMiddleware, upload.single("del
     }
 
     // Save the image path
-    order.imageConfirmDelivered = req.file.path;
+    order.imageConfirmDelivered = `/uploads/deliveryConfirmation/${req.file.filename}`;
     order.status = "Delivered";
     await order.save();
 
     return res.status(200).json({
       message: "Order delivery confirmed.",
       orderId: order._id,
-      imagePath: order.imageConfirmDelivered,
+      imagePath: `https://https://mma301-project-be.onrender.com/${order.imageConfirmDelivered}`,
     });
   } catch (error) {
     res.status(500).json({ message: "Server error.", error: error.message });
