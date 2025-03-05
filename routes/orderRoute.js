@@ -181,7 +181,7 @@ orderRoute.post("/add-to-cart", authMiddleware, async (req, res) => {
       vnp_TxnRef: newOrder._id.toString(),
       vnp_OrderInfo: `${newOrder._id}`,
       vnp_OrderType: ProductCode.Other,
-      vnp_ReturnUrl: "exp://192.168.0.103:8081",
+      vnp_ReturnUrl: "exp://192.168.0.103:8081/--/cart?orderId=${newOrder._id}",
       vnp_Locale: VnpLocale.VN,
       vnp_CreateDate: dateFormat(new Date()),
       vnp_ExpireDate: dateFormat(tomorrow),
