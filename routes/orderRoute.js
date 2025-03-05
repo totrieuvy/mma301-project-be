@@ -198,21 +198,18 @@ orderRoute.post("/add-to-cart", authMiddleware, async (req, res) => {
 
 /**
  * @swagger
- * /api/order/confirm-payment:
- *   post:
+ * /api/order/confirm-payment/{orderId}:
+ *   put:
  *     tags:
  *       - Orders
  *     summary: Confirm order payment and finalize order
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               orderId:
- *                 type: string
- *                 description: The ID of the order to confirm
+ *     parameters:
+ *       - in: path
+ *         name: orderId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: The ID of the order to confirm
  *     responses:
  *       200:
  *         description: Payment confirmed and order finalized
@@ -221,9 +218,9 @@ orderRoute.post("/add-to-cart", authMiddleware, async (req, res) => {
  *       500:
  *         description: Server error
  */
-orderRoute.post("/confirm-payment", authMiddleware, async (req, res) => {
+orderRoute.put("/confirm-payment/:orderId", authMiddleware, async (req, res) => {
   try {
-    const { orderId } = req.body;
+    const { orderId } = req.params; // Lấy orderId từ URL params
     const order = await db.Order.findById(orderId).populate("items.product");
 
     if (!order) {
