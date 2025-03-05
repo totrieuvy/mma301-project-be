@@ -176,15 +176,15 @@ orderRoute.post("/add-to-cart", authMiddleware, async (req, res) => {
     tomorrow.setDate(tomorrow.getDate() + 1);
 
     const vnpayResponse = await vnpay.buildPaymentUrl({
-      vnp_Amount: totalAmount * 100, // Convert to cents
+      vnp_Amount: totalAmount, // Convert to cents
       vnp_IpAddr: "127.0.0.1",
       vnp_TxnRef: newOrder._id.toString(),
       vnp_OrderInfo: `Thanh toan don hang ${newOrder._id}`,
       vnp_OrderType: ProductCode.Other,
       vnp_ReturnUrl: `exp://192.168.1.4:8081/--/cart?orderId=${newOrder._id}`, // Deep link return URL
       vnp_Locale: VnpLocale.VN,
-      vnp_CreateDate: dateFormat(new Date(), "yyyymmddHHMMss"),
-      vnp_ExpireDate: dateFormat(tomorrow, "yyyymmddHHMMss"),
+      vnp_CreateDate: dateFormat(new Date()),
+      vnp_ExpireDate: dateFormat(tomorrow),
     });
 
     return res.status(201).json({
