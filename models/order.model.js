@@ -9,8 +9,11 @@ const OrderSchema = mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["Pending", "Paid", "Canceled"],
+      enum: ["Pending", "Paid", "Canceled", "Shipping", "Delivered"],
       default: "Pending",
+    },
+    imageConfirmDelivered: {
+      type: String,
     },
     items: [
       {

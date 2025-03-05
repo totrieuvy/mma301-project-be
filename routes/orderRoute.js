@@ -8,11 +8,34 @@ const nodemailer = require("nodemailer");
 const fs = require("fs");
 const path = require("path");
 const handlebars = require("handlebars");
+const multer = require("multer");
 const moment = require("moment");
 const axios = require("axios");
 const CryptoJS = require("crypto-js");
 
 const orderRoute = express.Router();
+
+// Configure multer for file upload
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => {
+      const uploadPath = path.join(__dirname, "../uploads/deliveryConfirmation");
+      fs.mkdirSync(uploadPath, { recursive: true });
+      cb(null, uploadPath);
+    },
+    filename: (req, file, cb) => {
+      cb(null, `delivery-${req.params.orderId}-${Date.now()}${path.extname(file.originalname)}`);
+    },
+  }),
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = ["image/jpeg", "image/png", "image/gif"];
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error("Invalid file type. Only JPEG, PNG, and GIF are allowed."));
+    }
+  },
+});
 
 /**
  * @swagger
@@ -62,7 +85,7 @@ const orderRoute = express.Router();
  *   post:
  *     tags:
  *       - Orders
- *     summary: Add items to the cart and create a VNPAY payment URL
+ *     summary: Create a pending order with VNPAY payment URL
  *     requestBody:
  *       required: true
  *       content:
@@ -73,7 +96,6 @@ const orderRoute = express.Router();
  *               account:
  *                 type: string
  *                 description: The account ID
- *                 example: "64f8a6d123abc4567e891011"
  *               items:
  *                 type: array
  *                 items:
@@ -82,22 +104,12 @@ const orderRoute = express.Router();
  *                     product:
  *                       type: string
  *                       description: The product ID
- *                       example: "64f8a6d123abc4567e891011"
  *                     quantity:
  *                       type: number
  *                       description: The quantity of the product
- *                       example: 2
  *     responses:
  *       201:
  *         description: VNPAY payment URL created successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 vnpayResponse:
- *                   type: object
- *                   description: The VNPAY payment URL response
  *       400:
  *         description: Bad request
  *       404:
@@ -105,7 +117,7 @@ const orderRoute = express.Router();
  *       500:
  *         description: Internal server error
  */
-orderRoute.post("/add-to-cart", authMiddleware, roleMiddleware(["customer"]), async (req, res) => {
+orderRoute.post("/add-to-cart", authMiddleware, async (req, res) => {
   try {
     const { account, items } = req.body;
 
@@ -113,13 +125,13 @@ orderRoute.post("/add-to-cart", authMiddleware, roleMiddleware(["customer"]), as
       return res.status(400).json({ message: "An order must contain at least one product." });
     }
 
-    const accountDetails = await db.Account.findById(account).select("balance email").exec();
+    const accountDetails = await db.Account.findById(account).select("email").exec();
     if (!accountDetails) {
       return res.status(404).json({ message: "Account not found." });
     }
 
     let totalAmount = 0;
-    const updatedProducts = [];
+    const orderItems = [];
 
     for (const item of items) {
       const product = await db.Product.findById(item.product);
@@ -134,34 +146,18 @@ orderRoute.post("/add-to-cart", authMiddleware, roleMiddleware(["customer"]), as
       }
 
       totalAmount += item.quantity * product.price;
-      product.quantity -= item.quantity;
-      updatedProducts.push(product);
+      orderItems.push({
+        product: product._id,
+        quantity: item.quantity,
+      });
     }
-
-    if (accountDetails.balance < totalAmount) {
-      return res.status(400).json({ message: "Insufficient balance. Please recharge your account." });
-    }
-
-    accountDetails.balance -= totalAmount;
-    await accountDetails.save();
-
-    for (const product of updatedProducts) {
-      await product.save();
-    }
-
-    const adminAccount = await db.Account.findOne({ role: "admin" }).select("balance").exec();
-    if (!adminAccount) {
-      return res.status(500).json({ message: "Admin account not found." });
-    }
-
-    adminAccount.balance += totalAmount;
-    await adminAccount.save();
 
     const newOrder = new db.Order({
       account,
-      items,
+      items: orderItems,
       totalAmount,
-      status: "Paid",
+      status: "Pending",
+      imageConfirmDelivered: null,
     });
 
     await newOrder.save();
@@ -191,21 +187,92 @@ orderRoute.post("/add-to-cart", authMiddleware, roleMiddleware(["customer"]), as
       vnp_ExpireDate: dateFormat(tomorrow),
     });
 
-    const populatedOrder = await db.Order.findById(newOrder._id).populate("items.product").exec();
+    return res.status(201).json({
+      orderId: newOrder._id,
+      vnpayResponse,
+    });
+  } catch (error) {
+    res.status(500).json({ message: "Server error.", error: error.message });
+  }
+});
 
-    const formattedItems = populatedOrder.items.map((item) => ({
-      productName: item.product?.name || "Unknown product",
-      price: item.product?.price || 0,
+/**
+ * @swagger
+ * /api/order/confirm-payment:
+ *   post:
+ *     tags:
+ *       - Orders
+ *     summary: Confirm order payment and finalize order
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               orderId:
+ *                 type: string
+ *                 description: The ID of the order to confirm
+ *     responses:
+ *       200:
+ *         description: Payment confirmed and order finalized
+ *       400:
+ *         description: Invalid order or payment
+ *       500:
+ *         description: Server error
+ */
+orderRoute.post("/confirm-payment", authMiddleware, async (req, res) => {
+  try {
+    const { orderId } = req.body;
+    const order = await db.Order.findById(orderId).populate("items.product");
+
+    if (!order) {
+      return res.status(404).json({ message: "Order not found." });
+    }
+
+    if (order.status !== "Pending") {
+      return res.status(400).json({ message: "Order has already been processed." });
+    }
+
+    const account = await db.Account.findById(order.account);
+    if (!account) {
+      return res.status(404).json({ message: "Account not found." });
+    }
+
+    // Reduce product quantities
+    for (const item of order.items) {
+      const product = await db.Product.findById(item.product._id);
+      if (product) {
+        product.quantity -= item.quantity;
+        await product.save();
+      }
+    }
+
+    // Update order status
+    order.status = "Paid";
+    await order.save();
+
+    // Transfer funds to admin account
+    const adminAccount = await db.Account.findOne({ role: "admin" });
+    if (adminAccount) {
+      adminAccount.balance += order.totalAmount;
+      await adminAccount.save();
+    }
+
+    // Send confirmation email
+    const formattedItems = order.items.map((item) => ({
+      productName: item.product?.name || "Unknown Product",
       quantity: item.quantity,
+      price: item.product?.price || 0,
+      total: item.quantity * item.product?.price || 0,
     }));
 
     const emailTemplatePath = path.join(__dirname, "../templates/orderConfirmationTemplate.html");
     const emailTemplateSource = fs.readFileSync(emailTemplatePath, "utf8");
     const emailTemplate = handlebars.compile(emailTemplateSource);
-
     const emailHtml = emailTemplate({
-      orderId: newOrder._id,
-      totalAmount: totalAmount,
+      orderId: order._id,
+      totalAmount: order.totalAmount,
       items: formattedItems,
     });
 
@@ -219,7 +286,7 @@ orderRoute.post("/add-to-cart", authMiddleware, roleMiddleware(["customer"]), as
 
     const mailOptions = {
       from: process.env.EMAIL_USER,
-      to: accountDetails.email,
+      to: account.email,
       subject: "Order Confirmation",
       html: emailHtml,
     };
@@ -232,7 +299,122 @@ orderRoute.post("/add-to-cart", authMiddleware, roleMiddleware(["customer"]), as
       }
     });
 
-    return res.status(201).json(vnpayResponse);
+    return res.status(200).json({
+      message: "Payment confirmed and order processed.",
+      orderId: order._id,
+    });
+  } catch (error) {
+    res.status(500).json({ message: "Server error.", error: error.message });
+  }
+});
+
+/**
+ * @swagger
+ * /api/order/update-shipping/{orderId}:
+ *   patch:
+ *     tags:
+ *       - Orders
+ *     summary: Update order status to Shipping
+ *     parameters:
+ *       - in: path
+ *         name: orderId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Order status updated to Shipping
+ *       400:
+ *         description: Invalid order status
+ *       404:
+ *         description: Order not found
+ *       500:
+ *         description: Server error
+ */
+orderRoute.patch("/update-shipping/:orderId", authMiddleware, async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const order = await db.Order.findById(orderId);
+
+    if (!order) {
+      return res.status(404).json({ message: "Order not found." });
+    }
+
+    if (order.status !== "Paid") {
+      return res.status(400).json({ message: "Only paid orders can be marked as shipping." });
+    }
+
+    order.status = "Shipping";
+    await order.save();
+
+    return res.status(200).json({
+      message: "Order status updated to Shipping.",
+      orderId: order._id,
+    });
+  } catch (error) {
+    res.status(500).json({ message: "Server error.", error: error.message });
+  }
+});
+
+/**
+ * @swagger
+ * /api/order/confirm-delivery/{orderId}:
+ *   post:
+ *     tags:
+ *       - Orders
+ *     summary: Confirm order delivery with image
+ *     parameters:
+ *       - in: path
+ *         name: orderId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               deliveryImage:
+ *                 type: string
+ *                 format: binary
+ *     responses:
+ *       200:
+ *         description: Delivery confirmed and order status updated
+ *       400:
+ *         description: Invalid order status or missing image
+ *       404:
+ *         description: Order not found
+ *       500:
+ *         description: Server error
+ */
+orderRoute.post("/confirm-delivery/:orderId", authMiddleware, upload.single("deliveryImage"), async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const order = await db.Order.findById(orderId);
+
+    if (!order) {
+      return res.status(404).json({ message: "Order not found." });
+    }
+
+    if (order.status !== "Shipping") {
+      return res.status(400).json({ message: "Only shipping orders can be confirmed as delivered." });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ message: "Delivery confirmation image is required." });
+    }
+
+    // Save the image path
+    order.imageConfirmDelivered = req.file.path;
+    order.status = "Delivered";
+    await order.save();
+
+    return res.status(200).json({
+      message: "Order delivery confirmed.",
+      orderId: order._id,
+      imagePath: order.imageConfirmDelivered,
+    });
   } catch (error) {
     res.status(500).json({ message: "Server error.", error: error.message });
   }
@@ -444,6 +626,39 @@ orderRoute.post("/cancel-order/:orderId", authMiddleware, async (req, res) => {
     }
   } catch (error) {
     res.status(500).json({ message: "Lỗi máy chủ", error: error.message });
+  }
+});
+
+/**
+ * @swagger
+ * /api/order/shipper-orders:
+ *   get:
+ *     tags:
+ *       - Orders
+ *     summary: Get orders for shipper (Paid, Shipping, Delivered)
+ *     responses:
+ *       200:
+ *         description: List of orders for shipper
+ *       500:
+ *         description: Server error
+ */
+orderRoute.get("/shipper-orders", authMiddleware, roleMiddleware(["admin", "shipper"]), async (req, res) => {
+  try {
+    const orders = await db.Order.find({
+      status: { $in: ["Paid", "Shipping", "Delivered"] },
+    })
+      .populate({
+        path: "items.product",
+        select: "name price", // Only select necessary product details
+      })
+      .sort({
+        status: 1, // Sort by status, Paid will come first
+        createdAt: -1, // Then by most recent
+      });
+
+    res.status(200).json(orders);
+  } catch (error) {
+    res.status(500).json({ message: "Server error.", error: error.message });
   }
 });
 
